@@ -215,6 +215,8 @@ class Entry:
 		return hash((self._menu, self._item._id if self._item else None, self.label))
 
 	def __eq__(self, other):
+		if not isinstance(other, Entry):
+			return False
 		return self._menu is other._menu and self._item == other._item and self.label == other.label
 
 	def choose(self):
@@ -1012,22 +1014,34 @@ class _Commands:
 		def valid_route_to(self, target):
 			routes = []
 			seen = set()
-			base_routes = routes_to(self.menu, self.cli.walker, target._item.id, [])
 			relevant_tags = set()
-			for base_route in base_routes:
+			bases = {target}
+			base_routes = [target.path_to()]
+			while base_routes:
+				prev_tags = frozenset(relevant_tags)
+				base_route = base_routes.pop()
 				for e in base_route:
 					relevant_tags |= Entry.condition_deps(e.data['active']) | Entry.condition_deps(e.data['display'])
+				for tag in relevant_tags - prev_tags:
+					for ev in self.cli.walker.tag_events[tag]:
+						value, etype, eobj = ev
+						if eobj in bases:
+							continue
+						bases.add(eobj)
+						base_routes.append(eobj.path_to())
 				print(f"Base route: {' > '.join(e.label for e in base_route)}")
 			print(f"Considering {len(relevant_tags)} tags relevant to this search: {' '.join(self.menu.display_tag(tag, True) for tag in relevant_tags)}")
 			def key(tags):
 				keys = relevant_tags.intersection(tags.keys())
 				return frozenset((k, tags[k]) for k in keys)
 			def dead_end(route, tags):
+				return
 				if not set(tags.keys()) & relevant_tags:
 					return
 				print(f"Explored dead-end route: {' > '.join(e.label for e in route)}")
 				for k, v in tags.items():
 					self.cli.print_result(TagName(k), f"{self.menu.display_tag(k, True)} = {v!r}")
+			explore_queue = []
 			def explore(item, route, stack, tags={}, seen=seen, local_seen=frozenset()):
 				n = 0
 				k = (item, key(tags))
@@ -1035,19 +1049,13 @@ class _Commands:
 					dead_end(route, tags)
 					return
 				local_seen = local_seen | {k}
-				gk = (item, frozenset(tags.items()))
+				# gk = (item, frozenset(tags.items()))
+				gk = (item, key(tags))
 				if gk in seen:
 					dead_end(route, tags)
 					return
 				seen.add(gk)
 				io = Item(self.menu, item)
-				for entry in self.menu.root_options():
-					if not self.is_valid_step(entry, tags):
-						continue
-					rm = entry.reaction.item
-					explore(rm.id, route + [entry], [], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
-					n += 1
-				children = self.cli.walker.children[item]
 				for entry in io.options():
 					if not self.is_valid_step(entry, tags):
 						continue
@@ -1058,11 +1066,18 @@ class _Commands:
 						child = entry.reaction.get_item(tags)
 						explore(child.id, route + [entry], stack + [(item, entry)], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
 						n += 1
-				if not stack:
+				for entry in self.menu.root_options():
+					if not self.is_valid_step(entry, tags):
+						continue
+					rm = entry.reaction.item
+					explore(rm.id, route + [entry], [], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
+					n += 1
+				if len(stack) < 2:
 					if n < 1:
 						dead_end(route, tags)
 					return
 				parent, _ = stack.pop()
+				entry = stack[-1][1]
 				explore(parent, route + [entry], stack, self.compute_tag_effect(tags, io.data['onLeave']), seen, local_seen)
 			for entry in self.menu.root_options():
 				if not self.is_valid_step(entry, {}):

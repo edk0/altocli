@@ -15,6 +15,15 @@ from threading import Lock, Thread
 import textwrap
 
 
+INTRO = """
+There are commands, `-help list` to list them
+
+Command usage is accurate; keep it in mind. Some commands output numbered
+entries; these can be recalled by passing %1, %2 etc. as arguments to commands
+which take that argument type.
+"""
+
+
 class AltoStore:
 	def __init__(self):
 		self._store = {}
@@ -106,13 +115,15 @@ class Submenu(Reaction):
 		return f"Open submenu {self._id}"
 	@property
 	def item(self):
+		return self.get_item(self.menu._tags)
+	def get_item(self, tags):
 		if self._item:
 			return self._item
 		id_ = self._id
 		if self._postfix:
-			if self._postfix not in self.menu._tags:
+			if self._postfix not in tags:
 				return None
-			id_ += self.menu._tags[self._postfix]
+			id_ += tags[self._postfix]
 		return Item(self.menu, id_)
 	def enact(self, menu):
 		super().enact(menu)
@@ -244,19 +255,21 @@ effect:             {self.reaction.describe()}""")
 			self.print_tag_effect("tag effect on leave", ol, cli)
 
 	@classmethod
-	def evaluate_condition(cls, menu, cond):
+	def evaluate_condition(cls, menu, cond, tags=None):
+		if tags is None:
+			tags = menu._tags
 		if cond['tag'] == 'Always':
 			return True
 		if cond['tag'] == 'TagSet':
-			return cond['contents'] in menu._tags
+			return cond['contents'] in tags
 		if cond['tag'] == 'TagUnset':
-			return cond['contents'] not in menu._tags
+			return cond['contents'] not in tags
 		if cond['tag'] == 'TLAnd':
-			return all(cls.evaluate_condition(menu, x) for x in cond['contents'])
+			return all(cls.evaluate_condition(menu, x, tags) for x in cond['contents'])
 		if cond['tag'] == 'TLOr':
-			return any(cls.evaluate_condition(menu, x) for x in cond['contents'])
+			return any(cls.evaluate_condition(menu, x, tags) for x in cond['contents'])
 		if cond['tag'] == 'TLNot':
-			return not cls.evaluate_condition(menu, cond['contents'])
+			return not cls.evaluate_condition(menu, cond['contents'], tags)
 		raise ValueError
 
 	@classmethod
@@ -764,8 +777,7 @@ class ArgCommand(Argument):
 			x = '-' + x
 		x = x[1:].casefold()
 		try:
-			cli.get_command(x)
-			return x
+			return cli.get_command(x)
 		except KeyError:
 			raise ArgumentError("no such command")
 	def complete(self, cli, x):
@@ -791,8 +803,9 @@ class Command:
 	ARGS = []
 	REQUIRES_FULL_DATA = False
 
-	def __init__(self, cli, menu):
+	def __init__(self, cli, name, menu):
 		self.cli = cli
+		self.name = name
 		self.menu = menu
 		self.args = ArgSeq(*self.ARGS)
 
@@ -818,10 +831,28 @@ class Command:
 		except CommandError as e:
 			print(f"error: {e}")
 		except Exception as e:
+			import traceback; traceback.print_exc()
 			print(f"got {e!r} while running command")
 
 	def usage(self):
 		return self.args.usage()
+
+
+def routes_to(menu, walker, item, start=[]):
+	routes = []
+	def explore(item, route, seen=frozenset()):
+		if item in seen: # this is a cycle
+			return
+		seen = seen | {item}
+		io = Item(menu, item)
+		if io.highest_parent[0] == 0:
+			routes.append([io.highest_parent[2]] + route)
+			return
+		parents = walker.parents[item]
+		for parent, entry in parents:
+			explore(parent, [entry] + route, seen)
+	explore(item, start)
+	return routes
 
 
 class _Commands:
@@ -829,15 +860,16 @@ class _Commands:
 		"""
 		Print usage and help text for a command, or list all the commands
 		"""
-		ARGS = [ArgUnion(ArgLiteral("list", None), ArgCommand())]
+		ARGS = [ArgUnion(ArgLiteral("intro", "intro"), ArgLiteral("list", "list"), ArgCommand())]
 		def execute(self, cmd):
-			if cmd is None:
+			if isinstance(cmd, Command):
+				print(f"-{cmd.name} {cmd.usage()}")
+				if cmd.__doc__:
+					print(textwrap.dedent(cmd.__doc__).strip('\n'))
+			elif cmd == 'intro':
+				print(textwrap.dedent(INTRO).strip('\n'))
+			elif cmd == 'list':
 				print(' '.join(sorted(f"-{x}" for x in _Commands.commands.keys())))
-				return
-			command = self.cli.get_command(cmd)
-			print(f"-{cmd} {command.usage()}")
-			if command.__doc__:
-				print(textwrap.dedent(command.__doc__).strip('\n'))
 	class dump(Command):
 		"""
 		Save everything we know to the filesystem somewhere
@@ -900,7 +932,7 @@ class _Commands:
 			if p == [e]:
 				return "(root menu)"
 			else:
-				return ' > '.join(e.label for e in entry.path_to())
+				return ' > '.join(x.label for x in e.path_to())
 		def execute(self, tag):
 			for ev in self.cli.walker.tag_events[tag]:
 				value, etype, eobj = ev
@@ -915,6 +947,10 @@ class _Commands:
 			for what, entry in self.cli.walker.tag_deps[tag]:
 				self.cli.print_result(entry, f"controls {what} of [{entry.label}]")
 				print(f"\tat: {self.helpful_path(entry)}")
+			for reaction in self.cli.walker.postfix_deps[tag]:
+				entry = reaction.entry
+				self.cli.print_result(entry, f"controls target of [{entry.label}]")
+				print(f"\tat: {self.helpful_path(entry)}")
 	class routes_to(Command):
 		"""
 		List all the distinct, non-cyclic routes to a given menu
@@ -928,7 +964,11 @@ class _Commands:
 			if isinstance(item, Entry):
 				r = item.reaction
 				if isinstance(r, Submenu):
-					item = r.item
+					if r.item is not None:
+						item = r.item
+					else:
+						print("entry doesn't currently designate a menu")
+						return
 				else:
 					item = item._item
 					start = [item]
@@ -937,25 +977,103 @@ class _Commands:
 				return
 			if depth is not None and depth < 1:
 				raise ArgumentError("depth can't be less than 1")
-			routes = []
-			def explore(item, route, seen=frozenset()):
-				if item in seen: # this is a cycle
-					return
-				seen = seen | {item}
-				io = Item(self.menu, item)
-				if io.highest_parent[0] == 0:
-					routes.append([io.highest_parent[2]] + route)
-					return
-				parents = self.cli.walker.parents[item]
-				for parent, entry in parents:
-					explore(parent, [entry] + route, seen)
-			explore(item.id, start)
+			routes = routes_to(self.menu, self.cli.walker, item.id, start)
 			if depth is not None:
 				rs = set(tuple(route[-depth:]) for route in routes)
 				routes = [route[0].path_to() + list(route[1:]) for route in rs]
 			labels = [[e.label for e in route] for route in routes]
 			for rl in sorted(labels):
 				print(' > '.join(rl))
+	class navigate(Command):
+		"""
+		Try to find a valid way to click on something
+		"""
+		ARGS = [ArgSubmenu()]
+		REQUIRES_FULL_DATA = True
+		def is_valid_step(self, entry, tags):
+			display = Entry.evaluate_condition(self.menu, entry.data['display'], tags)
+			active = Entry.evaluate_condition(self.menu, entry.data['active'], tags)
+			return display and active
+		def compute_tag_effect(self, tags, actions):
+			tags = dict(tags)
+			tags.update(actions.get('setTags', {}))
+			for k in actions.get('unsetTags', []):
+				if k in tags:
+					del tags[k]
+			return tags
+		def plans(self, cond):
+			sets = set()
+			deps = list(Entry.condition_deps(cond))
+			for i in range(2**len(deps)):
+				t = {deps[n]: '' for n, c in enumerate(i) if c == '1'}
+				if not Entry.evaluate_condition(self.menu, cond, t):
+					continue
+				sets.add(frozenset(t.keys()))
+		def valid_route_to(self, target):
+			routes = []
+			seen = set()
+			base_routes = routes_to(self.menu, self.cli.walker, target._item.id, [])
+			relevant_tags = set()
+			for base_route in base_routes:
+				for e in base_route:
+					relevant_tags |= Entry.condition_deps(e.data['active']) | Entry.condition_deps(e.data['display'])
+				print(f"Base route: {' > '.join(e.label for e in base_route)}")
+			print(f"Considering {len(relevant_tags)} tags relevant to this search: {' '.join(self.menu.display_tag(tag, True) for tag in relevant_tags)}")
+			def key(tags):
+				keys = relevant_tags.intersection(tags.keys())
+				return frozenset((k, tags[k]) for k in keys)
+			def dead_end(route, tags):
+				if not set(tags.keys()) & relevant_tags:
+					return
+				print(f"Explored dead-end route: {' > '.join(e.label for e in route)}")
+				for k, v in tags.items():
+					self.cli.print_result(TagName(k), f"{self.menu.display_tag(k, True)} = {v!r}")
+			def explore(item, route, stack, tags={}, seen=seen, local_seen=frozenset()):
+				n = 0
+				k = (item, key(tags))
+				if k in local_seen: # this is a cycle
+					dead_end(route, tags)
+					return
+				local_seen = local_seen | {k}
+				gk = (item, frozenset(tags.items()))
+				if gk in seen:
+					dead_end(route, tags)
+					return
+				seen.add(gk)
+				io = Item(self.menu, item)
+				for entry in self.menu.root_options():
+					if not self.is_valid_step(entry, tags):
+						continue
+					rm = entry.reaction.item
+					explore(rm.id, route + [entry], [], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
+					n += 1
+				children = self.cli.walker.children[item]
+				for entry in io.options():
+					if not self.is_valid_step(entry, tags):
+						continue
+					if entry == target:
+						routes.append(route + [entry])
+						return
+					elif isinstance(entry.reaction, Submenu):
+						child = entry.reaction.get_item(tags)
+						explore(child.id, route + [entry], stack + [(item, entry)], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
+						n += 1
+				if not stack:
+					if n < 1:
+						dead_end(route, tags)
+					return
+				parent, _ = stack.pop()
+				explore(parent, route + [entry], stack, self.compute_tag_effect(tags, io.data['onLeave']), seen, local_seen)
+			for entry in self.menu.root_options():
+				if not self.is_valid_step(entry, {}):
+					continue
+				explore(entry.reaction.item.id, [entry], [])
+			if not routes:
+				raise CommandError("oh no we didn't find anything")
+			return sorted(routes, key=len)[0]
+		def execute(self, opt):
+			route = self.valid_route_to(opt)
+			print(' > '.join(e.label for e in route))
 	class choose(Command):
 		"""
 		Navigate to a child menu
@@ -1076,12 +1194,14 @@ class _Commands:
 			print(' > '.join(e[0].label for e in self.menu.stack))
 	class shortest_path(Command):
 		"""
-		Print the shortest known path to the current menu
+		Print the shortest known path to a menu
 		"""
-		ARGS = [ArgOptional(ArgWord())]
+		ARGS = [ArgOptional(ArgUnion(ArgSubmenu(), ArgWord()))]
 		def execute(self, arg):
 			l = []
-			if arg:
+			if isinstance(arg, Entry):
+				x = arg
+			elif isinstance(arg, str):
 				x = Item(self.menu, arg)
 			else:
 				x = self.menu.stack[-1][1]
@@ -1103,27 +1223,12 @@ class _Commands:
 			self.menu.open_top_menu()
 	class ls_root(Command):
 		"""
-		List the root menu entries
+		List the root menu entries (for going to with -goto %n)
 		"""
 		def execute(self):
 			root_options = [Entry(self.menu, info) for info in self.menu.root['Menu']['entries']]
 			for opt in root_options:
 				self.cli.print_result(opt, opt.label)
-	class open_root(Command):
-		"""
-		Open a synthetic menu containing the root menu entries (main menu, power, etc.)
-		"""
-		def execute(self):
-			class RootItem:
-				id = '(root menu)'
-				options = lambda _: [Entry(self.menu, info) for info in self.menu.root['Menu']['entries']]
-				data = {'onLeave': {'setTags': {}, 'unsetTags': []}}
-			item = RootItem()
-			entry = FakeEntry(self.menu, 'Root', None)
-			entry.reaction = Submenu(entry, None, item=item)
-			while self.menu.stack:
-				self.menu.up()
-			self.menu.stack.append((entry, item))
 	class _eval(Command):
 		"""
 		Evaluate some Python
@@ -1161,7 +1266,7 @@ class CLI:
 
 	def get_command(self, name):
 		if name not in self._commands:
-			self._commands[name] = _Commands.commands[name](self, self.menu)
+			self._commands[name] = _Commands.commands[name](self, name, self.menu)
 		return self._commands[name]
 
 	def run(self):

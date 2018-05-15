@@ -557,8 +557,10 @@ class ArgRecall(Argument):
 				v = self._recall_value(cli, l[0])
 				if isinstance(v, self.ACCEPTS):
 					return [self.convert(cli, v)], l[1:]
+				elif v is None:
+					raise ArgumentError(f"{l[0]}: nothing to recall ({len(cli.results)} remembered)")
 				else:
-					raise ArgumentError('incorrect type recalled')
+					raise ArgumentError("incorrect type recalled")
 			return super()._consume(cli, l)
 		except IndexError:
 			raise ArgumentError('missing required argument')
@@ -717,11 +719,13 @@ class ArgTag(ArgRecall):
 			raise ArgumentError(f"tag {x!r} does not exist")
 		return x
 	def complete(self, cli, x):
+		tag_names = set(cli.menu.tag_names.values())
+		named_tags = set(cli.menu.tag_names.keys())
 		if cli.walker.run:
-			all_known_tags = set(cli.walker.tag_events.keys()) | set(cli.menu.tag_names.values())
+			l = sorted(tag_names) + sorted(set(cli.walker.tag_events.keys()) - named_tags)
 		else:
-			all_known_tags = set(cli.menu._tags.keys()) | set(cli.menu.tag_names.keys()) | set(cli.menu.tag_names.values())
-		return sorted([t for t in all_known_tags if t.startswith(x)])
+			l = sorted(tag_names) + sorted(set(cli.menu._tags.keys()) - named_tags)
+		return [t for t in l if t.startswith(x)]
 
 
 class ArgExistingTag(ArgTag):
@@ -992,10 +996,10 @@ class _Commands:
 		"""
 		ARGS = [ArgSubmenu()]
 		REQUIRES_FULL_DATA = True
-		def is_valid_step(self, entry, tags):
+		def is_valid_step(self, target, entry, tags):
 			display = Entry.evaluate_condition(self.menu, entry.data['display'], tags)
 			active = Entry.evaluate_condition(self.menu, entry.data['active'], tags)
-			return display and active
+			return display and (active or entry == target)
 		def compute_tag_effect(self, tags, actions):
 			tags = dict(tags)
 			tags.update(actions.get('setTags', {}))
@@ -1022,6 +1026,9 @@ class _Commands:
 				base_route = base_routes.pop()
 				for e in base_route:
 					relevant_tags |= Entry.condition_deps(e.data['active']) | Entry.condition_deps(e.data['display'])
+					r = e.reaction
+					if isinstance(r, Submenu) and r._postfix:
+						relevant_tags |= {r._postfix}
 				for tag in relevant_tags - prev_tags:
 					for ev in self.cli.walker.tag_events[tag]:
 						value, etype, eobj = ev
@@ -1029,63 +1036,84 @@ class _Commands:
 							continue
 						bases.add(eobj)
 						base_routes.append(eobj.path_to())
-				print(f"Base route: {' > '.join(e.label for e in base_route)}")
 			print(f"Considering {len(relevant_tags)} tags relevant to this search: {' '.join(self.menu.display_tag(tag, True) for tag in relevant_tags)}")
+			relevant_entries = {target}
+			for tag in relevant_tags:
+				for ev in self.cli.walker.tag_events[tag]:
+					value, etype, eobj = ev
+					if isinstance(eobj, Item):
+						relevant_entries |= {r[1] for r in self.cli.walker.parents[eobj.id]}
+					elif isinstance(eobj, Entry):
+						relevant_entries.add(eobj)
+			rel_queue = list(relevant_entries)
+			roots = set(self.menu.root_options())
+			while rel_queue:
+				item = rel_queue.pop()._item
+				if not item:
+					continue
+				for parent, entry in self.cli.walker.parents[item.id]:
+					if entry in relevant_entries:
+						continue
+					relevant_entries.add(entry)
+					if entry in roots:
+						continue
+					rel_queue.append(entry)
+			irrelevant_entries = self.cli.walker.entries - relevant_entries
+			print(f"Eliminating {len(irrelevant_entries)} entries (of {len(self.cli.walker.entries)}) from search")
 			def key(tags):
 				keys = relevant_tags.intersection(tags.keys())
 				return frozenset((k, tags[k]) for k in keys)
-			def dead_end(route, tags):
-				return
-				if not set(tags.keys()) & relevant_tags:
-					return
-				print(f"Explored dead-end route: {' > '.join(e.label for e in route)}")
-				for k, v in tags.items():
-					self.cli.print_result(TagName(k), f"{self.menu.display_tag(k, True)} = {v!r}")
-			explore_queue = []
-			def explore(item, route, stack, tags={}, seen=seen, local_seen=frozenset()):
-				n = 0
+			to_explore = []
+			def explore_next(*a):
+				to_explore.insert(0, a)
+			def explore(item, route, stack, tags={}, seen=seen, local_seen=frozenset(), options=None):
 				k = (item, key(tags))
 				if k in local_seen: # this is a cycle
-					dead_end(route, tags)
 					return
 				local_seen = local_seen | {k}
-				# gk = (item, frozenset(tags.items()))
-				gk = (item, key(tags))
+				gk = (item, frozenset(tags.items()))
+				# gk = (item, key(tags))
 				if gk in seen:
-					dead_end(route, tags)
 					return
-				seen.add(gk)
+				if options is None:
+					seen.add(gk)
 				io = Item(self.menu, item)
-				for entry in io.options():
-					if not self.is_valid_step(entry, tags):
-						continue
+				if options is None:
+					options = [x for x in io.options() if self.is_valid_step(target, x, tags)]
+				for entry in options:
 					if entry == target:
 						routes.append(route + [entry])
 						return
-					elif isinstance(entry.reaction, Submenu):
+					if entry in irrelevant_entries:
+						continue
+					if isinstance(entry.reaction, Submenu):
 						child = entry.reaction.get_item(tags)
-						explore(child.id, route + [entry], stack + [(item, entry)], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
-						n += 1
+						explore_next(child.id, route + [entry], stack + [(item, entry, options)], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
 				for entry in self.menu.root_options():
-					if not self.is_valid_step(entry, tags):
+					if not self.is_valid_step(target, entry, tags):
 						continue
 					rm = entry.reaction.item
-					explore(rm.id, route + [entry], [], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
-					n += 1
+					explore_next(rm.id, route + [entry], [], self.compute_tag_effect(tags, entry.reaction.action), seen, local_seen)
 				if len(stack) < 2:
-					if n < 1:
-						dead_end(route, tags)
 					return
-				parent, _ = stack.pop()
+				parent, _, parent_opts = stack.pop()
 				entry = stack[-1][1]
-				explore(parent, route + [entry], stack, self.compute_tag_effect(tags, io.data['onLeave']), seen, local_seen)
+				explore_next(parent, route + [entry], stack, self.compute_tag_effect(tags, io.data['onLeave']), seen, local_seen, parent_opts)
 			for entry in self.menu.root_options():
-				if not self.is_valid_step(entry, {}):
+				if not self.is_valid_step(target, entry, {}):
 					continue
-				explore(entry.reaction.item.id, [entry], [])
-			if not routes:
+				explore_next(entry.reaction.item.id, [entry], [])
+			n = 0
+			while to_explore:
+				explore(*to_explore.pop())
+				n += 1
+				if routes:
+					break
+			else:
 				raise CommandError("oh no we didn't find anything")
-			return sorted(routes, key=len)[0]
+			print(f"identified a route after {n} iterations")
+			route = sorted(routes, key=len)[0]
+			return route
 		def execute(self, opt):
 			route = self.valid_route_to(opt)
 			print(' > '.join(e.label for e in route))
@@ -1114,7 +1142,6 @@ class _Commands:
 		Navigate to a menu, starting at the top
 		"""
 		ARGS = [ArgSubmenu()]
-		REQUIRES_FULL_DATA = True
 		def execute(self, entry):
 			self.menu.close()
 			for e in entry.path_to():
@@ -1351,7 +1378,11 @@ class CLI:
 		self.last_stack = self.menu.stack[:]
 		self.dont_print_menu = False
 		self._ct = None
-		cmd = input(self.prompt)
+		try:
+			cmd = input(self.prompt)
+		except EOFError:
+			print("\nbye")
+			raise SystemExit
 		if cmd == '..':
 			cmd = '-up'
 		if cmd.startswith('-'):

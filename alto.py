@@ -648,6 +648,8 @@ class ArgWord(Argument):
 class ArgAll(Argument):
 	NAME = 'STR...'
 	def _consume(self, cli, l):
+		if not l or not l[0]:
+			raise ArgumentError('missing required argument')
 		return [self.convert(cli.menu, ' '.join(l))], []
 
 

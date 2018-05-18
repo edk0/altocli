@@ -536,6 +536,16 @@ class Argument:
 			return [self.convert(cli, l[0])], l[1:]
 		except IndexError:
 			raise ArgumentError('missing required argument')
+	def optional(self, default=None):
+		return ArgOptional(self, default)
+	def __add__(self, other):
+		if not isinstance(other, Argument):
+			return NotImplemented
+		return ArgSeq(self, other)
+	def __or__(self, other):
+		if not isinstance(other, Argument):
+			return NotImplemented
+		return ArgUnion(self, other)
 
 
 class ArgRecall(Argument):
@@ -582,11 +592,21 @@ class ArgOptional(Argument):
 				return self.arg._consume(cli, [self.default])
 			return [None], []
 		return self.arg._consume(cli, l)
+	def optional(self):
+		return self
+
+
+def unpack(args, typ):
+	for arg in args:
+		if isinstance(arg, typ):
+			yield from arg.args
+		else:
+			yield arg
 
 
 class ArgUnion(Argument):
 	def __init__(self, *args):
-		self.args = args
+		self.args = tuple(unpack(args, ArgUnion))
 	def usage(self):
 		return "{%s}" % ' | '.join(a.usage() for a in self.args if a.usage())
 	def convert(self, cli, x):
@@ -609,7 +629,7 @@ class ArgUnion(Argument):
 
 class ArgSeq(Argument):
 	def __init__(self, *args):
-		self.args = args
+		self.args = tuple(unpack(args, ArgSeq))
 	def usage(self):
 		u = []
 		for param in self.args:
@@ -868,7 +888,7 @@ class _Commands:
 		"""
 		Print usage and help text for a command, or list all the commands
 		"""
-		ARGS = [ArgUnion(ArgLiteral("intro", "intro"), ArgLiteral("list", "list"), ArgCommand())]
+		ARGS = [ArgLiteral("intro", "intro") | ArgLiteral("list", "list") | ArgCommand()]
 		def execute(self, cmd):
 			if isinstance(cmd, Command):
 				print(f"-{cmd.name} {cmd.usage()}")
@@ -963,7 +983,7 @@ class _Commands:
 		"""
 		List all the distinct, non-cyclic routes to a given menu
 		"""
-		ARGS = [ArgOptional(ArgSeq(ArgUnion(ArgSubmenu(), ArgWord()), ArgOptional(ArgInt())), default='.')]
+		ARGS = [((ArgSubmenu() | ArgWord()) + ArgInt().optional()).optional(default='.')]
 		REQUIRES_FULL_DATA = True
 		def execute(self, item, depth):
 			start = []
@@ -1130,7 +1150,7 @@ class _Commands:
 		"""
 		List current menu entries
 		"""
-		ARGS = [ArgOptional(ArgLiteral("all", True))]
+		ARGS = [ArgLiteral("all", True).optional()]
 		def execute(self, all_):
 			for opt in self.cli.options:
 				if not all_ and not opt.display:
@@ -1152,7 +1172,7 @@ class _Commands:
 		"""
 		Navigate directly to a menu by ID by means of a synthetic menu item
 		"""
-		ARGS = [ArgUnion(ArgSubmenu(), ArgWord())]
+		ARGS = [ArgSubmenu() | ArgWord()]
 		def execute(self, item):
 			if isinstance(item, str):
 				item = Item(self.menu, item)
@@ -1180,7 +1200,7 @@ class _Commands:
 		"""
 		Print general information about a menu item
 		"""
-		ARGS = [ArgOptional(ArgSubmenu(), default='.')]
+		ARGS = [ArgSubmenu().optional(default='.')]
 		def execute(self, submenu):
 			submenu.explain(self.cli)
 	class tags(Command):
@@ -1240,7 +1260,7 @@ class _Commands:
 		"""
 		Print the shortest known path to a menu
 		"""
-		ARGS = [ArgOptional(ArgUnion(ArgSubmenu(), ArgWord()))]
+		ARGS = [(ArgSubmenu() | ArgWord()).optional()]
 		def execute(self, arg):
 			l = []
 			if isinstance(arg, Entry):

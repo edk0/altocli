@@ -950,11 +950,13 @@ class _Commands:
 		def execute(self, text):
 			args = text.split(' ')
 			self.cli.completion_debug = True
-			print(self.cli.completions(args[-1], len(text) - len(args[-1]), len(text) - 1, text))
+			x = self.cli.completions(args[-1], len(text) - len(args[-1]), len(text), text)
+			print('---')
+			print(x)
 			self.cli.completion_debug = False
 		def complete(self, args, ai):
 			al = args.split(' ')
-			return self.cli.completions(al[ai], len(' '.join(al[:ai])), len(' '.join(al[:ai + 1])), args)
+			return self.cli.completions(al[ai], len(' '.join(al[:ai] + [''])), len(' '.join(al[:ai + 1])), args)
 	class walk(Command):
 		"""
 		Walk the entire menu, remembering various things for other processing

@@ -1389,19 +1389,22 @@ class CLI:
 
 	def completions(self, s_, b, e, line):
 		s = s_.casefold()
+		self.cdprint(f"s={s!r} b={b!r} e={e!r} line={line!r}")
 		if line.startswith('-'):
 			if b > 0:
 				cmd, args = line[1:].split(' ', 1)
 				if cmd not in _Commands.commands:
 					return []
 				ai = line[:b].count(' ') - 1
-				return self.get_command(cmd).complete(args, ai)
-			cl = [f"-{x}" for x in _Commands.commands.keys()]
+				cl = self.get_command(cmd).complete(args, ai)
+			else:
+				cl = [f"-{x}" for x in _Commands.commands.keys()]
 		elif line.startswith('.'):
 			cl = ['..'] + [f".{opt.label}" for opt in self.options if not opt.display]
 		else:
 			cl = [opt.label for opt in self.options if opt.display and opt.active]
-		return sorted([x for x in cl if x.casefold().startswith(s)])
+		cl = [x for x in cl if x.casefold().startswith(s)]
+		return sorted(cl)
 
 	def _completer(self, s, n):
 		ck = (readline.get_line_buffer(), readline.get_begidx())

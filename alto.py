@@ -863,7 +863,7 @@ class Command:
 		cmd, *args = args
 		try:
 			al, sl = self.args._consume(self.cli, args)
-			if sl:
+			if sl and sl != ['']:
 				raise ArgumentError("too many arguments")
 		except ArgumentError as e:
 			print(e)

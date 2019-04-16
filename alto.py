@@ -1328,6 +1328,13 @@ class _Commands:
 			v = eval(code)
 			if v is not None:
 				print(v)
+	class _exec(Command):
+		"""
+		Execute some Python
+		"""
+		ARGS = [ArgAll()]
+		def execute(self, code):
+			exec(code)
 
 
 _Commands.commands = {k.replace('_', '-'): v for k, v in _Commands.__dict__.items() if not k.startswith('__')}

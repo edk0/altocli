@@ -1413,6 +1413,8 @@ class CLI:
 			b, e = readline.get_begidx(), readline.get_endidx()
 			buf = readline.get_line_buffer()
 			self._cl = self.completions(s, b, e, buf)
+			if len(self._cl) == 1:
+				self._cl[0] += ' '
 		return self._cl[n] if n < len(self._cl) else None
 
 	def prompt_and_run_once(self):

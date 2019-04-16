@@ -1417,7 +1417,7 @@ class CLI:
 		else:
 			cl = [opt.label for opt in self.options if opt.display and opt.active]
 		cl = [x for x in cl if x.casefold().startswith(s)]
-		return sorted(cl)
+		return cl
 
 	def _completer(self, s, n):
 		ck = (readline.get_line_buffer(), readline.get_begidx())

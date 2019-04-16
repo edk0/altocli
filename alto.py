@@ -719,9 +719,15 @@ class ArgConst(Argument):
 
 class ArgLiteral(Argument):
 	UNSET = object()
-	def __init__(self, literal, value=UNSET, ignore_case=True):
+	LITERAL = object()
+	def __init__(self, literal, value=LITERAL, ignore_case=True):
 		self.literal = literal
-		self.value = [] if value is self.UNSET else [value]
+		if value is self.LITERAL:
+			self.value = [literal]
+		elif value is self.UNSET:
+			self.value = []
+		else:
+			self.value = [value]
 		self.ignore_case = ignore_case
 	def usage(self, top=False):
 		return f'"{self.literal}"'
@@ -906,7 +912,7 @@ class _Commands:
 		"""
 		Print usage and help text for a command, or list all the commands
 		"""
-		ARGS = [ArgLiteral("intro", "intro") | ArgLiteral("list", "list") + ArgLiteral("full", "full").optional() | ArgCommand()]
+		ARGS = [ArgLiteral("intro") | ArgLiteral("list") + ArgLiteral("full").optional() | ArgCommand()]
 		def execute(self, cmd, full=False):
 			if isinstance(cmd, Command):
 				print(f"-{cmd.name} {cmd.usage()}")

@@ -16,11 +16,13 @@ import textwrap
 
 
 INTRO = """
-There are commands, `-help list` to list them
+`-help list` to list all commands.
 
 Command usage is accurate; keep it in mind. Some commands output numbered
 entries; these can be recalled by passing %1, %2 etc. as arguments to commands
 which take that argument type.
+
+Types for which this is defined are TAG and SUBMENU.
 """
 
 
@@ -522,13 +524,18 @@ class Menu:
 
 class Argument:
 	NAME = 'argument'
-	def usage(self):
+	def usage(self, top=False):
 		return self.NAME
 	def convert(self, cli, x):
 		return x
 	def complete(self, cli, x):
 		return []
 	def _complete(self, cli, args, ai):
+		cli.cdprint(f"Default complete for {self!r}: {args!r}[{ai}]")
+		if ai >= 1:
+			return []
+		if ai < len(args) - 1:
+			return []
 		return self.complete(cli, args[ai])
 	def _consume(self, cli, l):
 		"""returns a converted thing and a list of remaining args"""
@@ -580,8 +587,8 @@ class ArgOptional(Argument):
 	def __init__(self, arg, default=None):
 		self.arg = arg
 		self.default = default
-	def usage(self):
-		return f"[{self.arg.usage()}]"
+	def usage(self, top=False):
+		return f"[{self.arg.usage(True)}]"
 	def convert(self, cli, x):
 		return self.arg.convert(cli, x)
 	def _complete(self, cli, args, ai):
@@ -607,8 +614,12 @@ def unpack(args, typ):
 class ArgUnion(Argument):
 	def __init__(self, *args):
 		self.args = tuple(unpack(args, ArgUnion))
-	def usage(self):
-		return "{%s}" % ' | '.join(a.usage() for a in self.args if a.usage())
+	def usage(self, top=False):
+		us = [a.usage() for a in self.args]
+		rv = ' | '.join(u for u in us if u)
+		if top:
+			return rv
+		return "{%s}" % rv
 	def convert(self, cli, x):
 		for arg in self.args:
 			try:
@@ -616,8 +627,14 @@ class ArgUnion(Argument):
 			except ArgumentError:
 				continue
 		raise ArgumentError(f"expected one of: {', '.join(a.usage() for a in self.args)}")
-	def complete(self, cli, x):
-		return [v for l in (a.complete(cli, x) for a in self.args) for v in l]
+	def _complete(self, cli, args, ai):
+		l = []
+		for i, a in enumerate(self.args):
+			c = a._complete(cli, args, ai)
+			cli.cdprint(f"arg {i}: {c!r}")
+			l.extend(c)
+		return l
+		#return [v for l in (a.complete(cli, x) for a in self.args) for v in l]
 	def _consume(self, cli, l):
 		for arg in self.args:
 			try:
@@ -630,10 +647,10 @@ class ArgUnion(Argument):
 class ArgSeq(Argument):
 	def __init__(self, *args):
 		self.args = tuple(unpack(args, ArgSeq))
-	def usage(self):
+	def usage(self, top=False):
 		u = []
 		for param in self.args:
-			pu = param.usage()
+			pu = param.usage(len(self.args) == 1)
 			if pu:
 				u.append(pu)
 		return ' '.join(u)
@@ -706,7 +723,7 @@ class ArgLiteral(Argument):
 		self.literal = literal
 		self.value = [] if value is self.UNSET else [value]
 		self.ignore_case = ignore_case
-	def usage(self):
+	def usage(self, top=False):
 		return f'"{self.literal}"'
 	def convert(self, cli, x):
 		if x == self.literal:
@@ -721,6 +738,7 @@ class ArgLiteral(Argument):
 			return [self.literal]
 		return []
 	def _consume(self, cli, l):
+		cli.cdprint(l)
 		try:
 			return self.convert(cli, l[0]), l[1:]
 		except IndexError:
@@ -863,7 +881,7 @@ class Command:
 			print(f"got {e!r} while running command")
 
 	def usage(self):
-		return self.args.usage()
+		return self.args.usage(True)
 
 
 def routes_to(menu, walker, item, start=[]):
@@ -888,8 +906,8 @@ class _Commands:
 		"""
 		Print usage and help text for a command, or list all the commands
 		"""
-		ARGS = [ArgLiteral("intro", "intro") | ArgLiteral("list", "list") | ArgCommand()]
-		def execute(self, cmd):
+		ARGS = [ArgLiteral("intro", "intro") | ArgLiteral("list", "list") + ArgLiteral("full", "full").optional() | ArgCommand()]
+		def execute(self, cmd, full=False):
 			if isinstance(cmd, Command):
 				print(f"-{cmd.name} {cmd.usage()}")
 				if cmd.__doc__:
@@ -897,7 +915,13 @@ class _Commands:
 			elif cmd == 'intro':
 				print(textwrap.dedent(INTRO).strip('\n'))
 			elif cmd == 'list':
-				print(' '.join(sorted(f"-{x}" for x in _Commands.commands.keys())))
+				if full:
+					cmds = sorted(_Commands.commands.keys())
+					fw = max(map(len, cmds))
+					for k in cmds:
+						print(f"-{k:<{fw}} {self.cli.get_command(k).usage()}")
+				else:
+					print(' '.join(sorted(f"-{x}" for x in _Commands.commands.keys())))
 	class dump(Command):
 		"""
 		Save everything we know to the filesystem somewhere
@@ -1427,10 +1451,15 @@ def unfuck_readline():
 def main():
 	unfuck_readline()
 	readline.parse_and_bind("tab: menu-complete")
+	readline.parse_and_bind("Control-c: kill-whole-line")
 	readline.set_completer_delims(" ")
 
 	c = CLI()
-	c.run()
+	while True:
+	#	try:
+			c.run()
+	#	except KeyboardInterrupt:
+	#		print()
 
 if __name__ == '__main__':
 	main()

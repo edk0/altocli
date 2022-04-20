@@ -10,9 +10,9 @@ from pathlib import Path, PurePath
 from queue import Queue
 import re
 import readline
-import requests
-from threading import Lock, Thread
 import textwrap
+from threading import Lock, Thread
+from urllib.request import urlopen
 
 
 INTRO = """
@@ -37,7 +37,7 @@ class AltoStore:
 	def get(self, k):
 		return self.get_delayed(k).result()
 	def _download_item(self, k):
-		return requests.get(ALTO_ENDPOINT.format(k)).json()
+		return json.load(urlopen(ALTO_ENDPOINT.format(k)))
 	def __del__(self):
 		self._executor.shutdown(wait=False)
 

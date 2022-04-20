@@ -109,12 +109,12 @@ class Submenu(Reaction):
 		self._item = item
 	def describe(self):
 		if self._item:
-			return f"Open submenu {self._item.id}"
+			return f"Open submenu: {self._item.id}"
 		if self._postfix:
 			if not self._id:
 				return f"Open submenu: (contents of tag {self.menu.display_tag(self._postfix)})"
 			return f"Open submenu: {self._id} + contents of tag {self.menu.display_tag(self._postfix)}"
-		return f"Open submenu {self._id}"
+		return f"Open submenu: {self._id}"
 	@property
 	def item(self):
 		return self.get_item(self.menu._tags)

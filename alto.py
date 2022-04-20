@@ -975,8 +975,10 @@ class _Commands:
 		List all the known tags
 		"""
 		REQUIRES_FULL_DATA = True
+		def tag_key(self, tag):
+			return self.menu.tag_names.get(tag, tag)
 		def execute(self):
-			for tag in sorted(self.cli.walker.tag_events.keys()):
+			for tag in sorted(self.cli.walker.tag_events.keys(), key=self.tag_key):
 				if tag in self.menu._tags:
 					print(f"{self.menu.display_tag(tag, True)} = {self.menu._tags[tag]!r}")
 				else:

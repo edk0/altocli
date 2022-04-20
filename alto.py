@@ -1328,14 +1328,17 @@ class _Commands:
 		"""
 		def execute(self):
 			self.menu.open_top_menu()
-	class ls_root(Command):
+	class ls_root(ls):
 		"""
 		List the root menu entries (for going to with -goto %n)
 		"""
-		def execute(self):
-			root_options = [Entry(self.menu, info) for info in self.menu.root['Menu']['entries']]
-			for opt in root_options:
-				self.cli.print_result(opt, opt.label)
+		ARGS = [ArgLiteral("full").optional()]
+		def options(self):
+			return [Entry(self.menu, info) for info in self.menu.root["Menu"]["entries"]]
+		def execute(self, what):
+			if what is None:
+				what = "all"
+			return super().execute(what)
 	class _eval(Command):
 		"""
 		Evaluate some Python

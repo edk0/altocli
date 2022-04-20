@@ -1032,8 +1032,8 @@ class _Commands:
 						print("entry doesn't currently designate a menu")
 						return
 				else:
-					item = item._item
 					start = [item]
+					item = item._item
 			if item is None:
 				print("at top level")
 				return

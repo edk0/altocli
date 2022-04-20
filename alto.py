@@ -1380,7 +1380,7 @@ class CLI:
 			self.prompt_and_run_once()
 
 	def select_opt(self, t_):
-		t = t_.casefold()
+		t = t_.casefold().strip()
 		display = True
 		if t.startswith('.'):
 			t = t[1:]
@@ -1456,6 +1456,8 @@ class CLI:
 		if cmd.startswith('-'):
 			self.dont_print_menu = True
 			args = cmd[1:].split(' ')
+			if args[-1] == '':
+				del args[-1]
 			cmd = args[0]
 			if cmd not in _Commands.commands:
 				print("no such command")

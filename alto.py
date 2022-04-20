@@ -1184,15 +1184,24 @@ class _Commands:
 		"""
 		List current menu entries
 		"""
-		ARGS = [ArgLiteral("all", True).optional()]
-		def execute(self, all_):
-			for opt in self.cli.options:
-				if not all_ and not opt.display:
+		ARGS = [(ArgLiteral("all") | ArgLiteral("full")).optional()]
+		def options(self):
+			return self.cli.options
+		def label(self, opt):
+			if not opt.active:
+				return f"[{opt.label}]"
+			else:
+				return opt.label
+		def execute(self, what):
+			if what == 'full':
+				fw = max(len(self.label(opt)) for opt in self.options())
+			for opt in self.options():
+				if not what and not opt.display:
 					continue
-				if not opt.active:
-					self.cli.print_result(opt, f"[{opt.label}]")
+				if what == 'full':
+					self.cli.print_result(opt, f"{self.label(opt):<{fw}} {opt.reaction.describe()}")
 				else:
-					self.cli.print_result(opt, opt.label)
+					self.cli.print_result(opt, self.label(opt))
 	class goto(Command):
 		"""
 		Navigate to a menu, starting at the top
